@@ -33,6 +33,29 @@ python3 annotate_comments.py \
   --limit 5
 ```
 
+使用阿里云 DashScope 云端模型时，先把 API Key 放入环境变量，再选择
+`aliyun` provider（密钥不会写入命令历史或输出文件）：
+
+```bash
+export DASHSCOPE_API_KEY="sk-8710483a982e426aa08765f872601588"
+python3 annotate_comments.py \
+  --provider aliyun \
+  --input input/random_100_comments.jsonl \
+  --output output/random_100_comments_qwen_prelabeled.jsonl \
+  --concurrency 4
+```
+```bash
+export DASHSCOPE_API_KEY="sk-8710483a982e426aa08765f872601588"
+python3 annotate_comments.py \
+  --provider aliyun \
+  --input input/random_100_comments.jsonl \
+  --output output/prelabel_smoke.jsonl \
+  --limit 5
+```
+该预设使用 `https://dashscope.aliyuncs.com/compatible-mode/v1` 和
+`qwen3.8-flash`。如需切换其他 DashScope 模型，可同时传入
+`--model 模型名`；`--base-url`、`--model` 和 `--api-key-env` 都可覆盖预设值。
+
 脚本默认使用严格的 JSON Schema 结构化输出：
 
 ```json
@@ -50,6 +73,19 @@ Schema 会约束两部分标注的字段、嵌套结构和基础类型，脚本�
 - N1 分词、O1 段落、D2 MATTR、F1 固定音节启发式和所有派生公式由程序确定；模型负责需要语境的句法、词性、情绪、论证、立场、毒性和语用判断。
 - 输出经过字段、枚举、数值范围、证据原文片段及跨字段一致性校验。失败会把校验错误反馈给模型重试；仍失败时写入 `status=error`，不会伪造标签。
 - 当前没有提供固定 SUBTLEX-US 词表及固定功能词词典/POS 标注器。依照 PDF 的“无词表不得猜”要求，W1/W2 与 G1 输出 `null`，并记录 `lexicon_required`。F1 使用代码中固定且可复现的后备音节规则。
+
+代码按职责放在 `prelabeling/` 包中：
+
+- `config.py`：默认配置、客户端配置对象及共享异常。
+- `prompts.py`、`schemas.py`：模型提示词、输出结构和标签词表。
+- `mechanics.py`：分词、分段、MATTR、音节等确定性计算。
+- `client.py`：OpenAI 兼容请求、结构化输出降级和重试。
+- `validation.py`：模型输出校验及公式字段回填。
+- `pipeline.py`：单条评论的两阶段标注流程。
+- `storage.py`：JSONL 读取、格式化输出和断点续跑解析。
+- `cli.py`：命令行参数及批量并发调度。
+
+根目录的 `annotate_comments.py` 仅保留兼容入口，因此原有运行命令无需修改。
 
 ## 输出
 
