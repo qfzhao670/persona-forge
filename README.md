@@ -53,7 +53,9 @@ Schema 会约束两部分标注的字段、嵌套结构和基础类型，脚本�
 
 ## 输出
 
-输出仍是一行一条 JSON，并保留输入对象的原字段，新增：
+输出按“一条评论一个 JSON 对象”连续写入，并保留输入对象的原字段。为方便人工审计，
+`annotations.part_i` 和 `annotations.part_ii` 会展开为每个指标一行，指标内部保持紧凑；
+`--resume` 同时支持这种多行格式和旧版的一行一条格式。每个对象新增：
 
 - `annotations.part_i`：`Reddit_I.pdf` 的 16 个指标。
 - `annotations.part_ii`：`Reddit_II.pdf` 的 16 个指标。
