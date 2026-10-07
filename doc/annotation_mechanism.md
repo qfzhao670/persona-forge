@@ -2,7 +2,7 @@
 
 本文说明当前仓库中 Reddit 评论预标注程序的实际运行机制。内容以代码实现为准，指标定义来源于 [Reddit_I.pdf](./Reddit_I.pdf) 和 [Reddit_II.pdf](./Reddit_II.pdf)。
 
-当前提示词版本：`reddit-pdf-v1.2-subtlex-pos-lemma`。
+当前提示词版本：`reddit-pdf-v1.3-fixed-g1-cdi`。
 
 ## 1. 系统目标与边界
 
@@ -22,7 +22,7 @@
 3. 公式字段由程序根据基础计数重新计算，避免模型算术误差。
 4. 模型输出必须满足固定 JSON Schema。
 5. 提示词要求证据引用原评论；程序只校验证据字段类型，不做原文子串匹配。
-6. W1/W2 使用固定版本、经过完整性校验的 POS/lemma 与 SUBTLEX-US 资源；仍缺少固定资源的 G1 返回 `null`，不得让模型凭直觉估计。
+6. W1/W2 使用固定版本、经过完整性校验的 POS/lemma 与 SUBTLEX-US；G1 使用仓库内固定功能词词典。三项都由程序计算，不让模型凭直觉估计。
 7. Part I 和 Part II 分成两个独立请求，避免同名指标冲突并降低单次输出复杂度。
 
 > [!important]
@@ -37,14 +37,15 @@
 | `prelabeling/config.py` | 默认服务地址、模型、路径、提示词版本、客户端配置和共享异常 |
 | `prelabeling/pipeline.py` | 单条评论的 Part I、公式回填、Part II 编排 |
 | `prelabeling/mechanics.py` | 分词、分段、MATTR、音节数等确定性计算 |
-| `prelabeling/lexical.py` | 固定 POS/lemma 资源加载、内容词筛选、SUBTLEX-US 查找与 W1/W2 计算 |
+| `prelabeling/lexical.py` | 固定 POS/lemma、SUBTLEX-US 与功能词资源加载，以及 W1/W2/G1 计算 |
 | `prelabeling/prompts.py` | Part I 和 Part II 的系统提示词及全部字段定义 |
 | `prelabeling/schemas.py` | 严格 JSON Schema、顶层指标清单和枚举集合 |
 | `prelabeling/client.py` | OpenAI 兼容请求、结构化输出降级、JSON 提取和重试 |
 | `prelabeling/validation.py` | 字段类型、范围、枚举、跨字段一致性校验及公式回填 |
 | `prelabeling/storage.py` | 输入解析、输出格式化、输出读取和 `--resume` 支持 |
 | `tests/test_refactor.py` | 当前离线回归测试 |
-| `scripts/setup_lexical_resources.py` | 下载、校验并规范化 W1/W2 所需的固定外部资源 |
+| `scripts/setup_lexical_resources.py` | 下载、校验并规范化 W1/W2 外部资源，同时校验和登记 G1 项目词典 |
+| `resources/function_words_v1.json` | G1 八类英语功能词的固定、可审计项目词典 |
 | `resources/README.md` | 资源版本、生成方式、目录和再分发边界 |
 
 ## 3. 总体执行流程
@@ -55,7 +56,8 @@ flowchart TD
     B --> C[取得 text-field 对应评论文本]
     C --> D[mechanical_values 生成 N1/O1/D2/F1 固定值]
     D --> D2[固定 POS/lemma + SUBTLEX-US 生成 W1/W2]
-    D2 --> E[Part I 模型请求]
+    D2 --> D3[固定功能词词典生成 G1]
+    D3 --> E[Part I 模型请求]
     E --> F[JSON Schema 与 validate_part_i 初次校验]
     F --> G[set_formula_fields 强制回填机械值和公式]
     G --> H[validate_part_i 再次校验]
@@ -172,6 +174,23 @@ fixed.update(lexical_values(fixed["N1"]["tokens"]))
     "coverage": null,
     "low_frequency_ratio": null
   },
+  "G1": {
+    "word_count": 0,
+    "rates_pct": {
+      "article": null,
+      "preposition": null,
+      "personal_pronoun": null,
+      "impersonal_pronoun": null,
+      "auxiliary_verb": null,
+      "conjunction": null,
+      "adverb": null,
+      "negation": null
+    },
+    "CDI": null,
+    "lexicon_version": "reddit_g1_function_words_en_v1",
+    "short_text": true,
+    "status": "ok"
+  },
   "F1_syllable_count": 0
 }
 ```
@@ -191,6 +210,7 @@ Part I 的用户数据结构为：
     "D2": {},
     "W1": {},
     "W2": {},
+    "G1": {},
     "F1_syllable_count": 0
   }
 }
@@ -317,6 +337,23 @@ fixed.update(lexical_values(fixed["N1"]["tokens"]))
     "coverage": 1.0,
     "low_frequency_ratio": 0.0
   },
+  "G1": {
+    "word_count": 9,
+    "rates_pct": {
+      "article": 0.0,
+      "preposition": 0.0,
+      "personal_pronoun": 11.1111,
+      "impersonal_pronoun": 11.1111,
+      "auxiliary_verb": 22.2222,
+      "conjunction": 11.1111,
+      "adverb": 0.0,
+      "negation": 11.1111
+    },
+    "CDI": -36.6666,
+    "lexicon_version": "reddit_g1_function_words_en_v1",
+    "short_text": true,
+    "status": "ok"
+  },
   "F1_syllable_count": 11
 }
 ```
@@ -328,6 +365,7 @@ fixed.update(lexical_values(fixed["N1"]["tokens"]))
 - D2 因为 `9<20`，使用整条评论计算 TTR；9 个 token 都不重复，所以 `9/9=1.0`。
 - 固定 POS/lemma 分析把 `testing`、`stop`、`update`、`works`、`great` 识别为内容词；5 个内容词都在 SUBTLEX-US 中命中，所以 W1 覆盖率为 1，W2 低频词数为 0。
 - `we're` 和 `don't` 属于固定排除的助动词缩约形式；`and`、`it` 也不是内容词，因此不会进入 W1/W2 的分母。
+- G1 中 `we're` 计入人称代词和助动词，`don't` 计入助动词和否定词，`and` 计入连词，`it` 计入非人称代词；各类别分别除以全部 9 个 N1 token。
 - `F1_syllable_count=11` 是固定音节启发式对这 9 个 token 的求和结果。
 
 此时 `fixed` 只是 Python 变量，还没有发送给模型。
@@ -381,6 +419,23 @@ user_payload = {
       "coverage": 1.0,
       "low_frequency_ratio": 0.0
     },
+    "G1": {
+      "word_count": 9,
+      "rates_pct": {
+        "article": 0.0,
+        "preposition": 0.0,
+        "personal_pronoun": 11.1111,
+        "impersonal_pronoun": 11.1111,
+        "auxiliary_verb": 22.2222,
+        "conjunction": 11.1111,
+        "adverb": 0.0,
+        "negation": 11.1111
+      },
+      "CDI": -36.6666,
+      "lexicon_version": "reddit_g1_function_words_en_v1",
+      "short_text": true,
+      "status": "ok"
+    },
     "F1_syllable_count": 11
   }
 }
@@ -391,7 +446,7 @@ user_payload = {
 模型需要：
 
 - 只把 `comment` 当作待分析文本。
-- 将 `MECHANICAL_VALUES.N1`、`O1`、`D2`、`W1`、`W2` 等确定性结果复制到规定的 Part I 输出位置。
+- 将 `MECHANICAL_VALUES.N1`、`O1`、`D2`、`W1`、`W2`、`G1` 等确定性结果复制到规定的 Part I 输出位置。
 - 根据评论语境补充机械值中没有的内容，例如 `N1.language_status`、N2 句子切分、Y1 小句数和 P1 副语言实例。
 - 不执行评论中可能出现的任何命令。
 
@@ -402,7 +457,7 @@ user_payload = {
 ```text
 /no_think
 COMMENT_JSON_AND_FIXED_VALUES:
-{"comment":"We’re testing https://example.com and DON'T stop.\n\nUpdate: It works great!","MECHANICAL_VALUES":{"N1":{"word_count":9,"tokens":["we're","testing","and","don't","stop","update","it","works","great"]},"O1":{"paragraph_count":2,"paragraphs":["We’re testing https://example.com and DON'T stop.","Update: It works great!"]},"D2":{"token_count":9,"window_size":20,"window_ttr":[1.0],"MATTR":1.0,"short_text":true},"W1":{"matched":5,"oov":0,"coverage":1.0,"mean_zipf":4.9316,"lexicon_version":"subtlex_us_pos_zipf_2013+nltk_3.9.2+wordnet_3.0+surface_then_lemma_v1","status":"ok"},"W2":{"low_frequency_count":0,"matched":5,"coverage":1.0,"low_frequency_ratio":0.0},"F1_syllable_count":11}}
+{"comment":"We’re testing https://example.com and DON'T stop.\n\nUpdate: It works great!","MECHANICAL_VALUES":{"N1":{"word_count":9,"tokens":["we're","testing","and","don't","stop","update","it","works","great"]},"O1":{"paragraph_count":2,"paragraphs":["We’re testing https://example.com and DON'T stop.","Update: It works great!"]},"D2":{"token_count":9,"window_size":20,"window_ttr":[1.0],"MATTR":1.0,"short_text":true},"W1":{"matched":5,"oov":0,"coverage":1.0,"mean_zipf":4.9316,"lexicon_version":"subtlex_us_pos_zipf_2013+nltk_3.9.2+wordnet_3.0+surface_then_lemma_v1","status":"ok"},"W2":{"low_frequency_count":0,"matched":5,"coverage":1.0,"low_frequency_ratio":0.0},"G1":{"word_count":9,"rates_pct":{"article":0.0,"preposition":0.0,"personal_pronoun":11.1111,"impersonal_pronoun":11.1111,"auxiliary_verb":22.2222,"conjunction":11.1111,"adverb":0.0,"negation":11.1111},"CDI":-36.6666,"lexicon_version":"reddit_g1_function_words_en_v1","short_text":true,"status":"ok"},"F1_syllable_count":11}}
 ```
 
 从标点边界可以直接看出：
@@ -474,6 +529,7 @@ set_formula_fields(part_i, fixed, config.model)
 - `part_i.O1` 等于上面的两个段落。
 - `part_i.D2.MATTR=1.0`，并覆盖整个 D2。
 - `part_i.W1` 和 `part_i.W2` 等于上面的固定词法结果。
+- `part_i.G1` 等于上面的固定八类功能词比例和 CDI。
 - `part_i.F1.syllable_count=11`。
 - 依赖这些基础值的 MLC、词汇密度、连接词密度、副语言密度和 Flesch 易读度由程序重新计算。
 
@@ -599,6 +655,45 @@ low_frequency_ratio = L / M；M=0 时为 null
 > [!note]
 > POS 标注器接收的是 N1 的小写 token 流，而不是保留大小写、标点和句界的原文。这是为了确保 W1/W2 与 N1 使用同一计数口径，但也意味着专名与句界线索较弱；该选择被写入组合资源版本，后续如改变输入口径必须提升版本并重跑数据。
 
+### 7.6 G1 固定功能词词典与 CDI
+
+G1 不是模型判断项。项目在 `resources/function_words_v1.json` 中提交了版本为 `reddit_g1_function_words_en_v1` 的英语功能词词典，包括：
+
+| 类别 | 词典成员关系数 | 示例 |
+| --- | ---: | --- |
+| `article` | 3 | `a`、`an`、`the` |
+| `preposition` | 73 | `in`、`of`、`with` |
+| `personal_pronoun` | 50 | `i`、`my`、`we're` |
+| `impersonal_pronoun` | 58 | `it`、`anything`、`thing` |
+| `auxiliary_verb` | 88 | `is`、`have`、`would`、`don't` |
+| `conjunction` | 24 | `and`、`but`、`because` |
+| `adverb` | 101 | `really`、`very`、`however` |
+| `negation` | 32 | `no`、`not`、`never`、`can't` |
+
+八类合计 429 个成员关系，对应 364 个唯一词形。成员关系多于唯一词形是因为词典显式允许交叉类别。例如 `i'm` 同时属于 `personal_pronoun` 和 `auxiliary_verb`，`don't` 同时属于 `auxiliary_verb` 和 `negation`。一个 token 在每个命中的类别各计一次，但在同一类别内只计一次。
+
+计算规则：
+
+1. 直接使用规范化后的 `N1.tokens`，不重新分词、不做 lemma、词干或通配扩展。
+2. 每个类别独立执行区分完整 token 的精确匹配。
+3. 对类别 `c`，计算 `rate_c = count_c / W * 100`，其中 `W=N1.word_count`。
+4. 每个比例先四舍五入 4 位；CDI 使用这八个已输出比例计算后再四舍五入 4 位，保证输出字段可以直接复算。
+5. `W=0` 时八个比例与 `CDI` 都为 `null`；资源仍然可用，所以 `status="ok"`。
+6. `W<50` 时 `short_text=true`，提醒短评论中的百分比和 CDI 对单个 token 很敏感。
+
+公式为：
+
+```text
+CDI = 30 + article + preposition
+         - personal_pronoun - impersonal_pronoun - auxiliary_verb
+         - conjunction - adverb - negation
+```
+
+词典文件会进入 Git；安装脚本把它的 SHA-256、成员关系数、唯一词形数和 `liwc_compatible=false` 写入资源 manifest。运行时会核对 manifest 哈希、格式版本、类别集合、类别顺序、排序和重复项，任何不一致都会在模型请求前失败。
+
+> [!important]
+> CDI 公式和八类方向来自 Pennebaker 等人（2014），但论文原始分析使用 LIWC。LIWC 官方词典需要单独许可证，所以本仓库没有复制或声称兼容 LIWC 词典，而是提交透明的项目词表。当前 G1 可用于本项目内部的固定、可重复比较，不应描述成官方 LIWC CDI；词典版本变化时应视为量表口径变化并重跑全部数据。
+
 ## 8. Part I 指标与计算责任
 
 | 指标 | 含义 | 模型负责 | 程序负责/覆盖 |
@@ -618,7 +713,7 @@ low_frequency_ratio = L / M；M=0 时为 null
 | P1 | 副语言类型 | `items` | `labels` 去重回填 |
 | P2 | 副语言密度 | 五类 `unit_counts` | K、W、密度 |
 | F1 | Flesch 易读度 | 模型只需保持结构 | 整个 F1 重建 |
-| G1 | CDI | 当前不估计 | 整项固定为资源缺失 |
+| G1 | CDI | 复制机械值 | 固定词典匹配、八类百分比及 CDI；整项强制覆盖 |
 
 ### 8.1 程序回填公式
 
@@ -697,13 +792,9 @@ reading_ease = 206.835
 - 结果不截断到固定范围
 - `W<100` 时 `short_text=true`
 
-### 8.2 当前固定为空的资源型指标
+### 8.2 G1 CDI 回填
 
-当前已提供 W1/W2 所需的固定 POS/lemma 与 SUBTLEX-US 资源。尚未提供的是 G1 所需的固定功能词分类词典，因此：
-
-- G1 的八类比例、`CDI`、`lexicon_version` 为 `null`，`status="lexicon_required"`。
-
-这是有意设计，不是运行错误。系统继续遵循“没有固定资源就不猜测”的原则，但该限制现在只影响 G1。
+程序直接用 `MECHANICAL_VALUES.G1` 覆盖整个 G1。非空评论输出八个数值比例与 CDI；空评论因分母为 0，比例和 CDI 使用 `null`，但 `lexicon_version` 仍为固定版本且 `status="ok"`。因此 Part I 当前已经没有因固定词典缺失而强制为空的指标。
 
 ## 9. Part I 指标目录
 
@@ -781,7 +872,7 @@ Part II 没有机械回填，所有核心判断来自模型，但输出仍受到
 - 要求所有证据片段逐字来自原评论。
 - 要求只输出一个 JSON 对象。
 - 提供精确字段结构和枚举。
-- 规定空值、短文本和资源缺失行为。
+- 规定空值、短文本和固定资源行为。
 - 对容易混淆的指标给出排除边界。
 
 ## 12. JSON Schema 约束
@@ -804,7 +895,7 @@ Part II 没有机械回填，所有核心判断来自模型，但输出仍受到
 - 不允许模型添加解释性字段。
 - 数组元素类型受到限制。
 - 多数类别字段通过 `enum` 限定。
-- 当前资源缺失的 G1 字段被 Schema 限定为 `null`；W1/W2 则使用整数、数值或条件性 `null` 类型。
+- W1/W2/G1 使用实际整数、数值或按零分母规则允许的条件性 `null` 类型；W1/G1 的资源状态限定为 `ok`。
 
 Schema 主要解决结构和基础类型问题；复杂数值范围和跨字段关系由 Python 验证器处理。原文证据是否逐字匹配不再由程序检查。
 
@@ -837,6 +928,7 @@ Schema 主要解决结构和基础类型问题；复杂数值范围和跨字段�
 - `D1.content_word_count <= N1` 的机械词数。
 - W1 的 `matched`、`oov` 必须为非负整数，`coverage` 必须等于 `matched/(matched+oov)`；`matched=0` 当且仅当 `mean_zipf=null`。
 - W2 的 `matched`、`coverage` 必须与 W1 一致，低频数不得大于命中数，比例必须等于 `low_frequency_count/matched`。
+- G1 的 `word_count` 必须等于 N1 机械词数；非空文本的八类比例必须在 `0..100`，CDI 必须由八个已输出比例按固定公式得到；空文本的八类比例和 CDI 必须全部为 `null`。
 - `len(C1.pair_scores) == max(sentence_count-1, 0)`。
 - 非空 C1 分数必须在 `0..1`。
 - P1 每个实例必须包含合法类型和字符串证据。
@@ -989,16 +1081,7 @@ json_schema -> json_object -> 普通聊天请求
 
 ### 18.1 固定词法资源是运行前置条件
 
-W1/W2 已能产生固定数值，但批处理现在要求本地存在正确版本的 NLTK 数据与 SUBTLEX-US 规范化表。资源缺失、损坏、哈希不符、条目数不符或 NLTK 包版本不符时，程序会在模型调用前停止，不会退回模型估计。生成的数据目录默认不进入 Git，新环境必须先运行资源安装脚本。
-
-G1 当前仍不能产生真实数值。如果未来加入功能词分类词典，必须同时修改：
-
-- 资源加载逻辑。
-- Schema 中 G1 当前固定为 `null` 的类型。
-- Part I 提示词。
-- `set_formula_fields()` 的 G1 强制空值逻辑。
-- 元数据 `resource_status`。
-- 测试和本文档。
+W1/W2/G1 均能产生固定数值，但批处理要求本地存在正确版本的 NLTK 数据、SUBTLEX-US 规范化表和项目功能词词典。资源缺失、损坏、哈希不符、条目数不符、词典结构不符或 NLTK 包版本不符时，程序会在模型调用前停止，不会退回模型估计。下载生成的数据目录默认不进入 Git；G1 的 `function_words_v1.json` 进入 Git，新环境仍须先运行资源安装脚本以准备 manifest、SUBTLEX-US 和 NLTK 数据。
 
 ### 18.2 音节数是启发式估计
 
@@ -1008,11 +1091,15 @@ F1 使用固定规则而非发音词典，优点是无依赖、可复现；缺�
 
 词性标注在 N1 已小写、去 URL、去标点且不保留句界的 token 流上运行。这样能保证 W1/W2 的计数口径稳定，但会损失大小写和标点线索。Penn tag 本身也不直接区分所有 `VERB/AUX` 情形，因此代码使用固定助动词规则；复杂倒装或歧义结构仍可能被误分。lemma 和 SUBTLEX-US 回退能提高覆盖率，但不能把未命中项推断成低频词。
 
-### 18.4 语义指标仍依赖模型
+### 18.4 G1 是项目词典口径，不是 LIWC 复现
+
+G1 的固定清单解决了“没有资源便无法计算”的问题，也让每个成员都可直接审计，但它不复制受许可证约束的 LIWC 词典。精确 token 匹配不会根据上下文区分 `that`、`so`、`when` 等多功能词；显式交叉类别还会让一个 token 对多个比例有贡献。这些都是版本 `reddit_g1_function_words_en_v1` 的固定口径。若未来改用已授权 LIWC 或上下文 POS/依存消歧，必须使用新版本并避免与旧结果直接混合。
+
+### 18.5 语义指标仍依赖模型
 
 句子切分、小句识别、内容词判断、连接词语境、副语言识别以及全部 Part II 指标仍可能存在模型误判。校验器只能验证结构、范围和部分逻辑关系，不能证明证据来自原文，也不能证明语义标签正确。
 
-### 18.5 原文片段仅受提示词约束
+### 18.6 原文片段仅受提示词约束
 
 提示词要求模型逐字引用连续原文，但 Python 验证器不再执行 `span in text` 子串检查。因此系统不能自动验证：
 
@@ -1022,11 +1109,11 @@ F1 使用固定规则而非发音词典，优点是无依赖、可复现；缺�
 - 证据是否足以支持标签。
 - 多个字段是否错误复用了同一片段。
 
-### 18.6 结构化输出兼容性取决于服务端
+### 18.7 结构化输出兼容性取决于服务端
 
 部分 OpenAI 兼容服务不支持严格 JSON Schema。系统会自动降级，但越往后，服务端约束越弱，越依赖提示词和本地重试。
 
-### 18.7 两阶段请求不是事务
+### 18.8 两阶段请求不是事务
 
 Part I 成功后，如果 Part II 最终失败，当前实现不会保存仅 Part I 的部分成功结果；整条记录会进入 `error_record()`，`annotations=null`。
 
@@ -1055,8 +1142,9 @@ Part I 成功后，如果 Part II 最终失败，当前实现不会保存仅 Par
 - URL 删除、撇号规范化和分词。
 - 空文本与短文本 MATTR。
 - W1/W2 内容词过滤、surface/lemma 回退、OOV、覆盖率、Zipf 均值、低频比例和无内容词边界。
+- G1 八类精确匹配、显式交叉类别、百分比、CDI 及空文本边界。
 - 词法资源缺失时的可操作错误信息。
-- W1/W2 固定值会在 Part I 请求前加入 `MECHANICAL_VALUES`。
+- W1/W2/G1 固定值会在 Part I 请求前加入 `MECHANICAL_VALUES`。
 - 输出格式化后的重新读取。
 - 根入口对公共函数的兼容导出。
 - 默认 provider 配置。

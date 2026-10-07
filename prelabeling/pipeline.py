@@ -55,7 +55,6 @@ def annotate_one(
         "usage": {"part_i": usage_i, "part_ii": usage_ii},
         "resource_status": {
             **lexical_resource_status(),
-            "function_word_lexicon": "not_provided",
             "flesch_syllables": "fixed_fallback_heuristic",
         },
     }

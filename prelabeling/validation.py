@@ -132,13 +132,12 @@ def set_formula_fields(part: dict[str, Any], fixed: Mapping[str, Any], model: st
         "reading_ease": reading_ease, "short_text": w < 100,
     }
     part["G1"] = {
-        "word_count": w,
-        "rates_pct": {name: None for name in (
-            "article", "preposition", "personal_pronoun", "impersonal_pronoun",
-            "auxiliary_verb", "conjunction", "adverb", "negation",
-        )},
-        "CDI": None, "lexicon_version": None,
-        "short_text": w < 50, "status": "lexicon_required",
+        "word_count": fixed["G1"]["word_count"],
+        "rates_pct": dict(fixed["G1"]["rates_pct"]),
+        "CDI": fixed["G1"]["CDI"],
+        "lexicon_version": fixed["G1"]["lexicon_version"],
+        "short_text": fixed["G1"]["short_text"],
+        "status": fixed["G1"]["status"],
     }
 
 
@@ -214,6 +213,45 @@ def validate_part_i(part: dict[str, Any], text: str) -> None:
     expected_low_ratio = None if matched == 0 else round4(Decimal(low) / Decimal(matched))
     if part["W2"]["low_frequency_ratio"] != expected_low_ratio:
         raise AnnotationError("W2.low_frequency_ratio 与 low_frequency_count/matched 不一致")
+
+    g1 = part["G1"]
+    g1_word_count = require_int(g1["word_count"], 0, None, "G1.word_count")
+    if g1_word_count != len(tokenize(text)):
+        raise AnnotationError("G1.word_count 必须等于 N1 机械词数")
+    g1_categories = (
+        "article", "preposition", "personal_pronoun", "impersonal_pronoun",
+        "auxiliary_verb", "conjunction", "adverb", "negation",
+    )
+    require_exact_keys(g1["rates_pct"], g1_categories, "G1.rates_pct")
+    require_enum(g1["status"], {"ok"}, "G1.status")
+    if not isinstance(g1["lexicon_version"], str) or not g1["lexicon_version"]:
+        raise AnnotationError("G1.lexicon_version 必须是非空字符串")
+    if not isinstance(g1["short_text"], bool) or g1["short_text"] != (g1_word_count < 50):
+        raise AnnotationError("G1.short_text 必须等于 word_count<50")
+    require_number_or_none(g1["CDI"], "G1.CDI")
+    if g1_word_count == 0:
+        if g1["CDI"] is not None or any(
+            value is not None for value in g1["rates_pct"].values()
+        ):
+            raise AnnotationError("G1 在 word_count=0 时各比例和 CDI 必须为 null")
+    else:
+        for category, value in g1["rates_pct"].items():
+            require_number_or_none(value, f"G1.rates_pct.{category}")
+            if value is None or not 0 <= value <= 100:
+                raise AnnotationError(f"G1.rates_pct.{category} 必须在 0..100")
+        expected_cdi = round4(
+            Decimal(30)
+            + Decimal(str(g1["rates_pct"]["article"]))
+            + Decimal(str(g1["rates_pct"]["preposition"]))
+            - Decimal(str(g1["rates_pct"]["personal_pronoun"]))
+            - Decimal(str(g1["rates_pct"]["impersonal_pronoun"]))
+            - Decimal(str(g1["rates_pct"]["auxiliary_verb"]))
+            - Decimal(str(g1["rates_pct"]["conjunction"]))
+            - Decimal(str(g1["rates_pct"]["adverb"]))
+            - Decimal(str(g1["rates_pct"]["negation"]))
+        )
+        if g1["CDI"] != expected_cdi:
+            raise AnnotationError("G1.CDI 与八类比例公式不一致")
 
     pair_scores = part["C1"]["pair_scores"]
     if not isinstance(pair_scores, list):

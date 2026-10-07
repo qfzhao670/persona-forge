@@ -9,4 +9,5 @@ doc/*
 !doc/annotation_mechanism.md
 resources/*
 !resources/README.md
+!resources/function_words_v1.json
 README_LOCAL.md

@@ -32,10 +32,13 @@ from prelabeling.mechanics import (
     tokenize,
 )
 from prelabeling.lexical import (
+    FUNCTION_WORD_VERSION,
+    G1_CATEGORIES,
     LEXICON_VERSION,
     TokenAnalysis,
     analyze_tokens,
     frequency_metrics,
+    g1_metrics,
     lexical_resource_status,
     lexical_values,
     load_lexical_resources,

@@ -24,6 +24,7 @@ from prelabeling.lexical import (
     TokenAnalysis,
     analyze_tokens,
     frequency_metrics,
+    g1_metrics,
     load_lexical_resources,
 )
 from prelabeling.storage import format_output_record, load_output_records
@@ -77,6 +78,7 @@ class LexicalMetricTests(unittest.TestCase):
             tagger=FixedTagger(),
             lemmatizer=FixedLemmatizer(),
             zipf_by_word={},
+            function_words={},
             resource_dir=Path("."),
         )
         analyses = analyze_tokens(
@@ -121,6 +123,36 @@ class LexicalMetricTests(unittest.TestCase):
 
     def test_missing_resources_have_an_actionable_error(self) -> None:
         load_lexical_resources.cache_clear()
+
+    def test_g1_counts_explicit_overlaps_and_computes_cdi(self) -> None:
+        lexicon = {
+            "article": frozenset({"the"}),
+            "preposition": frozenset({"in"}),
+            "personal_pronoun": frozenset({"i'm"}),
+            "impersonal_pronoun": frozenset({"it"}),
+            "auxiliary_verb": frozenset({"i'm"}),
+            "conjunction": frozenset({"and"}),
+            "adverb": frozenset({"really"}),
+            "negation": frozenset({"not"}),
+        }
+        result = g1_metrics(
+            ["the", "i'm", "not", "really", "in", "and", "it"],
+            lexicon,
+        )
+        self.assertEqual(result["word_count"], 7)
+        self.assertEqual(set(result["rates_pct"].values()), {14.2857})
+        self.assertEqual(result["CDI"], -27.1428)
+        self.assertEqual(result["status"], "ok")
+
+    def test_g1_empty_text_uses_null_rates_and_cdi(self) -> None:
+        lexicon = {category: frozenset({"placeholder"}) for category in (
+            "article", "preposition", "personal_pronoun", "impersonal_pronoun",
+            "auxiliary_verb", "conjunction", "adverb", "negation",
+        )}
+        result = g1_metrics([], lexicon)
+        self.assertTrue(all(value is None for value in result["rates_pct"].values()))
+        self.assertIsNone(result["CDI"])
+        self.assertTrue(result["short_text"])
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(AnnotationError, "setup_lexical_resources.py"):
                 load_lexical_resources(directory)
@@ -128,7 +160,7 @@ class LexicalMetricTests(unittest.TestCase):
 
 
 class PipelineLexicalTests(unittest.TestCase):
-    def test_w1_w2_are_added_to_part_i_mechanical_values(self) -> None:
+    def test_w1_w2_g1_are_added_to_part_i_mechanical_values(self) -> None:
         lexical = {
             "W1": {
                 "matched": 1,
@@ -144,6 +176,23 @@ class PipelineLexicalTests(unittest.TestCase):
                 "coverage": 1.0,
                 "low_frequency_ratio": 0.0,
             },
+            "G1": {
+                "word_count": 1,
+                "rates_pct": {
+                    "article": 0.0,
+                    "preposition": 0.0,
+                    "personal_pronoun": 0.0,
+                    "impersonal_pronoun": 0.0,
+                    "auxiliary_verb": 0.0,
+                    "conjunction": 0.0,
+                    "adverb": 0.0,
+                    "negation": 0.0,
+                },
+                "CDI": 30.0,
+                "lexicon_version": "test-function-words",
+                "short_text": True,
+                "status": "ok",
+            },
         }
         config = ClientConfig(
             base_url="https://example.test/v1",
@@ -158,6 +207,7 @@ class PipelineLexicalTests(unittest.TestCase):
         def inspect_part_i_call(system, payload, *args):
             self.assertEqual(payload["MECHANICAL_VALUES"]["W1"], lexical["W1"])
             self.assertEqual(payload["MECHANICAL_VALUES"]["W2"], lexical["W2"])
+            self.assertEqual(payload["MECHANICAL_VALUES"]["G1"], lexical["G1"])
             raise RuntimeError("payload inspected")
 
         with (

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download, verify, and prepare fixed lexical resources for W1/W2."""
+"""Download, verify, and prepare fixed lexical resources for W1/W2/G1."""
 
 from __future__ import annotations
 
@@ -16,7 +16,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_RESOURCE_DIR = ROOT / "resources"
+FUNCTION_WORD_SOURCE = ROOT / "resources" / "function_words_v1.json"
 LEXICON_VERSION = "subtlex_us_pos_zipf_2013+nltk_3.9.2+wordnet_3.0+surface_then_lemma_v1"
+FUNCTION_WORD_VERSION = "reddit_g1_function_words_en_v1"
+G1_CATEGORIES = (
+    "article", "preposition", "personal_pronoun", "impersonal_pronoun",
+    "auxiliary_verb", "conjunction", "adverb", "negation",
+)
 SOURCES = {
     "subtlexus1.zip": {
         "url": "https://www.ugent.be/plone_portal/pp/experimentele-psychologie/en/research/documents/subtlexus/subtlexus1.zip",
@@ -126,6 +132,37 @@ def build_subtlex(source_zip: Path, destination: Path) -> tuple[int, str]:
     return len(values), sha256_file(destination)
 
 
+def prepare_function_words(destination: Path) -> tuple[int, int, str]:
+    try:
+        value = json.loads(FUNCTION_WORD_SOURCE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"invalid tracked function-word lexicon: {exc}") from exc
+    if value.get("format_version") != 1:
+        raise RuntimeError("unsupported function-word lexicon format")
+    if value.get("lexicon_version") != FUNCTION_WORD_VERSION:
+        raise RuntimeError("function-word lexicon version mismatch")
+    categories = value.get("categories")
+    if not isinstance(categories, dict) or tuple(categories) != G1_CATEGORIES:
+        raise RuntimeError("function-word categories or category order mismatch")
+    memberships = 0
+    unique_words: set[str] = set()
+    for category in G1_CATEGORIES:
+        words = categories[category]
+        if (
+            not isinstance(words, list)
+            or not words
+            or not all(isinstance(word, str) and word for word in words)
+            or words != sorted(set(words))
+        ):
+            raise RuntimeError(f"invalid function-word category: {category}")
+        memberships += len(words)
+        unique_words.update(words)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.resolve() != FUNCTION_WORD_SOURCE.resolve():
+        shutil.copy2(FUNCTION_WORD_SOURCE, destination)
+    return memberships, len(unique_words), sha256_file(destination)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--resource-dir", type=Path, default=DEFAULT_RESOURCE_DIR)
@@ -141,6 +178,9 @@ def main() -> int:
     resource_dir = args.resource_dir.resolve()
     cache_dir = args.source_cache.resolve() if args.source_cache else None
     resource_dir.mkdir(parents=True, exist_ok=True)
+    function_memberships, function_unique_words, function_hash = prepare_function_words(
+        resource_dir / "function_words_v1.json"
+    )
 
     with tempfile.TemporaryDirectory(prefix="reddit-lexical-resources-") as directory:
         work_dir = Path(directory)
@@ -162,7 +202,7 @@ def main() -> int:
         safe_extract(sources["wordnet.zip"], nltk_data / "corpora")
 
     manifest = {
-        "format_version": 1,
+        "format_version": 2,
         "lexicon_version": LEXICON_VERSION,
         "subtlex_us": {
             "source_url": SOURCES["subtlexus1.zip"]["url"],
@@ -190,12 +230,23 @@ def main() -> int:
                 ),
             },
         },
+        "function_words": {
+            "file": "function_words_v1.json",
+            "version": FUNCTION_WORD_VERSION,
+            "sha256": function_hash,
+            "memberships": function_memberships,
+            "unique_words": function_unique_words,
+            "liwc_compatible": False,
+        },
         "lookup_policy": "surface_then_apostrophe_stripped_then_lemma_v1",
     }
     (resource_dir / "lexical_manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    print(f"prepared {entry_count} SUBTLEX-US entries in {resource_dir}")
+    print(
+        f"prepared {entry_count} SUBTLEX-US entries and "
+        f"{function_unique_words} G1 function words in {resource_dir}"
+    )
     return 0
 
 

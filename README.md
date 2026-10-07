@@ -8,7 +8,7 @@
 - 输入文件：`input/random_100_comments.jsonl`
 - 输出文件：`output/random_100_comments_prelabeled.jsonl`
 
-W1/W2 使用固定版本的 NLTK POS/lemma 资源和 SUBTLEX-US Zipf 词频表。首次运行前安装依赖并准备本地资源：
+W1/W2 使用固定版本的 NLTK POS/lemma 与 SUBTLEX-US Zipf 词频表；G1 使用仓库内固定、可审计的八类功能词词典。首次运行前安装依赖并准备本地资源：
 
 ```bash
 python3 -m pip install -r requirements.txt
@@ -77,16 +77,16 @@ Schema 会约束两部分标注的字段、嵌套结构和基础类型，脚本�
 
 - 每条评论发起两个独立请求，对应两份 PDF，避免 Part I/II 中同名的 `N1`、`P1` 冲突，也减少单次输出过长造成的漏项。
 - 评论以 JSON 字符串置于用户消息中，系统提示明确把它视为不可信数据，不执行评论内指令。
-- N1 分词、O1 段落、D2 MATTR、W1/W2 固定词频指标、F1 固定音节启发式和所有派生公式由程序确定；模型负责其余需要语境的句法、词性、情绪、论证、立场、毒性和语用判断。
+- N1 分词、O1 段落、D2 MATTR、W1/W2 固定词频指标、G1 CDI、F1 固定音节启发式和所有派生公式由程序确定；模型负责其余需要语境的句法、词性、情绪、论证、立场、毒性和语用判断。
 - 输出经过字段、枚举、数值范围及跨字段一致性校验。证据字段只校验字符串类型，不校验是否逐字存在于原文。失败会把其他校验错误反馈给模型重试；仍失败时写入 `status=error`，不会伪造标签。
-- W1/W2 直接对 N1 token 运行固定 NLTK POS 标注，通过 WordNet lemma 和 SUBTLEX-US Zipf 表计算；模型输出后程序会强制回填。G1 所需的固定功能词分类词典仍未提供，因此 G1 保持 `null` 和 `lexicon_required`。F1 使用固定且可复现的后备音节规则。
+- W1/W2 直接对 N1 token 运行固定 NLTK POS 标注，通过 WordNet lemma 和 SUBTLEX-US Zipf 表计算。G1 对同一 N1 token 流执行项目功能词词典精确匹配，计算八类百分比及 CDI。三项在模型输出后都会由程序强制回填。项目功能词词典不是 LIWC 词典复刻；F1 使用固定且可复现的后备音节规则。
 
 代码按职责放在 `prelabeling/` 包中：
 
 - `config.py`：默认配置、客户端配置对象及共享异常。
 - `prompts.py`、`schemas.py`：模型提示词、输出结构和标签词表。
 - `mechanics.py`：分词、分段、MATTR、音节等确定性计算。
-- `lexical.py`：固定 POS/lemma 分析、SUBTLEX-US 加载及 W1/W2 计算。
+- `lexical.py`：固定 POS/lemma 分析、SUBTLEX-US 加载、功能词词典加载及 W1/W2/G1 计算。
 - `client.py`：OpenAI 兼容请求、结构化输出降级和重试。
 - `validation.py`：模型输出校验及公式字段回填。
 - `pipeline.py`：单条评论的两阶段标注流程。

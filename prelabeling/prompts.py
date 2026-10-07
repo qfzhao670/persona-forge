@@ -8,8 +8,8 @@ PART_I_SYSTEM = r"""
 2. 只输出一个合法 JSON 对象，不要 Markdown、代码围栏、解释或思考过程。必须包含规定的全部指标和字段，不得新增字段。
 3. 计数字段必须是 JSON 整数。比例、均值和密度按规则计算；要求四舍五入 4 位或 2 位时使用 JSON 数值，允许省略末尾 0，不得写成字符串。
 4. MECHANICAL_VALUES 是程序依照文档规则预先计算的权威值。凡注明“复制机械值”的字段必须逐项原样复制，不得重新计算或修正。
-5. 程序已提供固定 NLTK POS/lemma 资源和 SUBTLEX-US Zipf 词表，MECHANICAL_VALUES.W1/W2 是权威结果，必须原样复制。当前仍未提供 G1 所需的固定功能词分类词典，所以 G1 必须走“资源缺失”分支；不得凭直觉估算。
-6. 凡写“等于 N1/N2”的字段必须与对应结果一致。空文本、短文本和资源缺失时严格使用规定的 0、[]、null 与布尔值。
+5. 程序已提供固定 NLTK POS/lemma、SUBTLEX-US Zipf 词表和项目固定功能词分类词典。MECHANICAL_VALUES.W1/W2/G1 是权威结果，必须逐项原样复制，不得凭直觉估算。
+6. 凡写“等于 N1/N2”的字段必须与对应结果一致。空文本和短文本严格使用规定的 0、[]、null 与布尔值。
 
 逐项定义（一级指标 -> 每个衡量字段 -> 规则）：
 
@@ -128,20 +128,20 @@ PART_I_SYSTEM = r"""
   - short_text：W<100 为 true，否则 false；程序计算。
 
 - G1 分类-动态指数 CDI：由八类功能词比例构成；高值偏类别化/对象化，低值偏动态/叙事化，不是质量分。
-  - word_count：W，等于 N1.word_count；程序填写。
-  - rates_pct.article：冠词数/W*100；资源缺失，必须为 null。
-  - rates_pct.preposition：介词数/W*100；资源缺失，必须为 null。
-  - rates_pct.personal_pronoun：人称代词数/W*100；资源缺失，必须为 null。
-  - rates_pct.impersonal_pronoun：非人称代词数/W*100；资源缺失，必须为 null。
-  - rates_pct.auxiliary_verb：助动词数/W*100；资源缺失，必须为 null。
-  - rates_pct.conjunction：连词数/W*100；资源缺失，必须为 null。
-  - rates_pct.adverb：副词数/W*100；资源缺失，必须为 null。
-  - rates_pct.negation：否定词数/W*100；资源缺失，必须为 null。
-  - CDI：30+article+preposition-personal_pronoun-impersonal_pronoun-auxiliary_verb-conjunction-adverb-negation；资源缺失，必须为 null。
-  - lexicon_version：未提供，必须为 null。
-  - short_text：W<50 为 true，否则 false；程序填写。
-  - status：必须是 lexicon_required。
-  - 规则：只能用固定功能词分类词典计算；本任务尚未提供该词典，不得自行分类或估计。
+  - word_count：W，等于 N1.word_count；复制 MECHANICAL_VALUES.G1.word_count。
+  - rates_pct.article：固定词典中的冠词 token 数/W*100；复制机械值。
+  - rates_pct.preposition：固定词典中的介词 token 数/W*100；复制机械值。
+  - rates_pct.personal_pronoun：固定词典中的人称代词 token 数/W*100；复制机械值。
+  - rates_pct.impersonal_pronoun：固定词典中的非人称代词 token 数/W*100；复制机械值。
+  - rates_pct.auxiliary_verb：固定词典中的助动词 token 数/W*100；复制机械值。
+  - rates_pct.conjunction：固定词典中的连词 token 数/W*100；复制机械值。
+  - rates_pct.adverb：固定词典中的常见副词 token 数/W*100；复制机械值。
+  - rates_pct.negation：固定词典中的否定词 token 数/W*100；复制机械值。
+  - CDI：30+article+preposition-personal_pronoun-impersonal_pronoun-auxiliary_verb-conjunction-adverb-negation；复制机械值。
+  - lexicon_version：项目功能词词典版本；复制机械值中的非空字符串。
+  - short_text：W<50 为 true，否则 false；复制机械值。
+  - status：资源已加载，必须是 ok。
+  - 规则：程序严格匹配规范化后的 N1.tokens，不进行词干扩展。词典明确列入多个类别的 token 在每个类别各计一次，例如 i'm 同时计 personal_pronoun 和 auxiliary_verb。每项比例和 CDI 四舍五入 4 位；W=0 时八项比例及 CDI 为 null。该项目词典不是 LIWC 词典复刻。整个 G1 必须原样复制 MECHANICAL_VALUES.G1。
 
 必须使用这个精确结构：
 {
@@ -160,7 +160,7 @@ PART_I_SYSTEM = r"""
   "P1":{"items":[],"labels":[]},
   "P2":{"unit_counts":{"emoji_emoticon":0,"repeated_punctuation":0,"expressive_caps":0,"letter_lengthening":0,"stage_action_sound":0},"paralinguistic_units":0,"word_count":0,"per_100_words":0},
   "F1":{"word_count":0,"sentence_count":0,"syllable_count":0,"reading_ease":null,"short_text":true},
-  "G1":{"word_count":0,"rates_pct":{"article":null,"preposition":null,"personal_pronoun":null,"impersonal_pronoun":null,"auxiliary_verb":null,"conjunction":null,"adverb":null,"negation":null},"CDI":null,"lexicon_version":null,"short_text":true,"status":"lexicon_required"}
+  "G1":{"word_count":0,"rates_pct":{"article":null,"preposition":null,"personal_pronoun":null,"impersonal_pronoun":null,"auxiliary_verb":null,"conjunction":null,"adverb":null,"negation":null},"CDI":null,"lexicon_version":"reddit_g1_function_words_en_v1","short_text":true,"status":"ok"}
 }
 """.strip()
 

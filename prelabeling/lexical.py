@@ -1,4 +1,4 @@
-"""Fixed POS/lemma analysis and SUBTLEX-US frequency measurements."""
+"""Fixed lexical resources for SUBTLEX-US frequency and G1 CDI metrics."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ RESOURCE_DIR_ENV = "PRELABELING_RESOURCE_DIR"
 DEFAULT_RESOURCE_DIR = Path(__file__).resolve().parent.parent / "resources"
 MANIFEST_NAME = "lexical_manifest.json"
 LEXICON_NAME = "subtlex_us_zipf.tsv"
+FUNCTION_WORD_NAME = "function_words_v1.json"
 EXPECTED_NLTK_VERSION = "3.9.2"
 EXPECTED_ENTRY_COUNT = 74286
 LEXICON_VERSION = (
@@ -27,6 +28,17 @@ LEXICON_VERSION = (
 )
 TAGGER_VERSION = "nltk_3.9.2:averaged_perceptron_tagger_eng"
 LEMMATIZER_VERSION = "nltk_3.9.2:wordnet_3.0"
+FUNCTION_WORD_VERSION = "reddit_g1_function_words_en_v1"
+G1_CATEGORIES = (
+    "article",
+    "preposition",
+    "personal_pronoun",
+    "impersonal_pronoun",
+    "auxiliary_verb",
+    "conjunction",
+    "adverb",
+    "negation",
+)
 
 _WORDNET_POS_BY_PREFIX = {
     "NN": "n",
@@ -59,6 +71,7 @@ class LexicalResources:
     tagger: Any
     lemmatizer: Any
     zipf_by_word: Mapping[str, float]
+    function_words: Mapping[str, frozenset[str]]
     resource_dir: Path
 
 
@@ -103,7 +116,7 @@ def _load_manifest(resource_dir: Path) -> dict[str, Any]:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise _resource_error(f"资源清单损坏：{exc}") from exc
-    if not isinstance(value, dict) or value.get("format_version") != 1:
+    if not isinstance(value, dict) or value.get("format_version") != 2:
         raise _resource_error("资源清单版本不受支持")
     if value.get("lexicon_version") != LEXICON_VERSION:
         raise _resource_error("资源清单与当前代码要求的词表版本不一致")
@@ -141,6 +154,42 @@ def _load_zipf_lexicon(resource_dir: Path, manifest: Mapping[str, Any]) -> dict[
             f"{path} 应含 {EXPECTED_ENTRY_COUNT} 个词形，实际为 {len(values)}"
         )
     return values
+
+
+def _load_function_words(
+    resource_dir: Path,
+    manifest: Mapping[str, Any],
+) -> dict[str, frozenset[str]]:
+    path = resource_dir / FUNCTION_WORD_NAME
+    if not path.exists():
+        raise _resource_error(f"缺少 {path}")
+    expected_hash = manifest.get("function_words", {}).get("sha256")
+    if not isinstance(expected_hash, str) or sha256_file(path) != expected_hash:
+        raise _resource_error(f"{path} 的 SHA-256 与资源清单不一致")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise _resource_error(f"功能词词典损坏：{exc}") from exc
+    if not isinstance(value, dict) or value.get("format_version") != 1:
+        raise _resource_error("功能词词典格式版本不受支持")
+    if value.get("lexicon_version") != FUNCTION_WORD_VERSION:
+        raise _resource_error("功能词词典与当前代码要求的版本不一致")
+    categories = value.get("categories")
+    if not isinstance(categories, dict) or tuple(categories) != G1_CATEGORIES:
+        raise _resource_error("功能词词典类别或类别顺序不正确")
+
+    loaded: dict[str, frozenset[str]] = {}
+    for category in G1_CATEGORIES:
+        words = categories[category]
+        if (
+            not isinstance(words, list)
+            or not words
+            or not all(isinstance(word, str) and word for word in words)
+            or words != sorted(set(words))
+        ):
+            raise _resource_error(f"功能词类别 {category} 必须是非空、排序且无重复的字符串数组")
+        loaded[category] = frozenset(words)
+    return loaded
 
 
 @lru_cache(maxsize=4)
@@ -193,6 +242,7 @@ def load_lexical_resources(resource_dir_value: str | None = None) -> LexicalReso
         tagger=tagger,
         lemmatizer=lemmatizer,
         zipf_by_word=_load_zipf_lexicon(resource_dir, manifest),
+        function_words=_load_function_words(resource_dir, manifest),
         resource_dir=resource_dir,
     )
 
@@ -317,12 +367,51 @@ def frequency_metrics(
     }
 
 
+def g1_metrics(
+    tokens: Sequence[str],
+    function_words: Mapping[str, frozenset[str]],
+) -> dict[str, Any]:
+    """Compute fixed CDI components using exact matches on normalized N1 tokens."""
+    word_count = len(tokens)
+    if word_count == 0:
+        rates: dict[str, float | None] = {category: None for category in G1_CATEGORIES}
+        cdi = None
+    else:
+        denominator = Decimal(word_count)
+        rates = {}
+        for category in G1_CATEGORIES:
+            lexicon = function_words[category]
+            count = sum(token in lexicon for token in tokens)
+            rates[category] = round4(Decimal(count) / denominator * 100)
+        cdi = round4(
+            Decimal(30)
+            + Decimal(str(rates["article"]))
+            + Decimal(str(rates["preposition"]))
+            - Decimal(str(rates["personal_pronoun"]))
+            - Decimal(str(rates["impersonal_pronoun"]))
+            - Decimal(str(rates["auxiliary_verb"]))
+            - Decimal(str(rates["conjunction"]))
+            - Decimal(str(rates["adverb"]))
+            - Decimal(str(rates["negation"]))
+        )
+    return {
+        "word_count": word_count,
+        "rates_pct": rates,
+        "CDI": cdi,
+        "lexicon_version": FUNCTION_WORD_VERSION,
+        "short_text": word_count < 50,
+        "status": "ok",
+    }
+
+
 def lexical_values(
     tokens: Sequence[str],
     resource_dir: Path | None = None,
 ) -> dict[str, dict[str, Any]]:
     resources = load_lexical_resources(str(resource_dir) if resource_dir else None)
-    return frequency_metrics(analyze_tokens(tokens, resources), resources.zipf_by_word)
+    values = frequency_metrics(analyze_tokens(tokens, resources), resources.zipf_by_word)
+    values["G1"] = g1_metrics(tokens, resources.function_words)
+    return values
 
 
 def lexical_resource_status() -> dict[str, str]:
@@ -330,4 +419,5 @@ def lexical_resource_status() -> dict[str, str]:
         "subtlex_us": LEXICON_VERSION,
         "pos_tagger": TAGGER_VERSION,
         "lemmatizer": LEMMATIZER_VERSION,
+        "function_word_lexicon": FUNCTION_WORD_VERSION,
     }

@@ -121,12 +121,13 @@ PART_I_SCHEMA = object_schema({
     }),
     "G1": object_schema({
         "word_count": INTEGER,
-        "rates_pct": object_schema({name: NULL for name in (
+        "rates_pct": object_schema({name: NUMBER_OR_NULL for name in (
             "article", "preposition", "personal_pronoun", "impersonal_pronoun",
             "auxiliary_verb", "conjunction", "adverb", "negation",
         )}),
-        "CDI": NULL, "lexicon_version": NULL, "short_text": {"type": "boolean"},
-        "status": {"type": "string", "enum": ["lexicon_required"]},
+        "CDI": NUMBER_OR_NULL, "lexicon_version": STRING,
+        "short_text": {"type": "boolean"},
+        "status": {"type": "string", "enum": ["ok"]},
     }),
 })
 

@@ -14,7 +14,7 @@ ALIYUN_MODEL = "qwen3.8-flash"
 ALIYUN_API_KEY_ENV = "DASHSCOPE_API_KEY"
 DEFAULT_INPUT = Path("input/random_100_comments.jsonl")
 DEFAULT_OUTPUT = Path("output/random_100_comments_prelabeled.jsonl")
-PROMPT_VERSION = "reddit-pdf-v1.2-subtlex-pos-lemma"
+PROMPT_VERSION = "reddit-pdf-v1.3-fixed-g1-cdi"
 
 
 class AnnotationError(RuntimeError):
