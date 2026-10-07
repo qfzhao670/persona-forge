@@ -2,4 +2,5 @@
 .venv/
 input/
 output/
-doc/
+doc/*
+!doc/annotation_mechanism.md
