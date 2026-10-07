@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 import annotate_comments
-from prelabeling import mechanics, pipeline
+from prelabeling import mechanics, pipeline, validation
 from prelabeling.cli import main, parse_args
 from prelabeling.config import (
     ALIYUN_API_KEY_ENV,
@@ -45,6 +45,21 @@ class MechanicsTests(unittest.TestCase):
         short = mechanics.mechanical_values("one two one")
         self.assertEqual(short["D2"]["MATTR"], 0.6667)
         self.assertTrue(short["D2"]["short_text"])
+
+
+class SpanValidationTests(unittest.TestCase):
+    def test_does_not_require_spans_to_match_source_text(self) -> None:
+        validation.require_spans(
+            ["I press the button", "entirely rewritten evidence"],
+            "I click the button.",
+            "E2.evidence",
+        )
+
+    def test_still_requires_span_fields_to_have_the_right_type(self) -> None:
+        with self.assertRaisesRegex(AnnotationError, "字符串数组"):
+            validation.require_spans([123], "source", "E2.evidence")
+        with self.assertRaisesRegex(AnnotationError, "字符串或 null"):
+            validation.require_optional_span(123, "source", "R1.claim")
 
 
 class LexicalMetricTests(unittest.TestCase):

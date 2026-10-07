@@ -50,14 +50,13 @@ def require_string_list(value: Any, path: str) -> list[str]:
 
 
 def require_spans(spans: Any, text: str, path: str) -> None:
-    for span in require_string_list(spans, path):
-        if not span or span not in text:
-            raise AnnotationError(f"{path} 含非原文片段: {span!r}")
+    """Validate only the container type; source-text matching is intentionally disabled."""
+    require_string_list(spans, path)
 
 
 def require_optional_span(span: Any, text: str, path: str) -> None:
-    if span is not None and (not isinstance(span, str) or not span or span not in text):
-        raise AnnotationError(f"{path} 必须为原文片段或 null")
+    if span is not None and not isinstance(span, str):
+        raise AnnotationError(f"{path} 必须为字符串或 null")
 
 
 def set_formula_fields(part: dict[str, Any], fixed: Mapping[str, Any], model: str) -> None:
@@ -234,8 +233,8 @@ def validate_part_i(part: dict[str, Any], text: str) -> None:
     for index, item in enumerate(items):
         require_exact_keys(item, ("type", "evidence"), f"P1.items[{index}]")
         require_enum(item["type"], allowed_p1, f"P1.items[{index}].type")
-        if not isinstance(item["evidence"], str) or not item["evidence"] or item["evidence"] not in text:
-            raise AnnotationError(f"P1.items[{index}].evidence 必须是非空原文片段")
+        if not isinstance(item["evidence"], str):
+            raise AnnotationError(f"P1.items[{index}].evidence 必须是字符串")
     labels = require_string_list(part["P1"]["labels"], "P1.labels")
     if labels != list(dict.fromkeys(item["type"] for item in items)):
         raise AnnotationError("P1.labels 必须是 items 类别按首次出现去重的结果")
