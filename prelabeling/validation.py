@@ -86,14 +86,8 @@ def set_formula_fields(part: dict[str, Any], fixed: Mapping[str, Any], model: st
         insufficient=c < 2,
     )
 
-    part["W1"] = {
-        "matched": None, "oov": None, "coverage": None, "mean_zipf": None,
-        "lexicon_version": None, "status": "lexicon_required",
-    }
-    part["W2"] = {
-        "low_frequency_count": None, "matched": None, "coverage": None,
-        "low_frequency_ratio": None,
-    }
+    part["W1"] = dict(fixed["W1"])
+    part["W2"] = dict(fixed["W2"])
     cw = part["D1"]["content_word_count"]
     part["D1"].update(
         word_count=w,
@@ -196,6 +190,31 @@ def validate_part_i(part: dict[str, Any], text: str) -> None:
     cw = require_int(part["D1"]["content_word_count"], 0, None, "D1.content_word_count")
     if cw > len(tokenize(text)):
         raise AnnotationError("D1 content_word_count 不能大于 word_count")
+
+    matched = require_int(part["W1"]["matched"], 0, None, "W1.matched")
+    oov = require_int(part["W1"]["oov"], 0, None, "W1.oov")
+    require_number_or_none(part["W1"]["coverage"], "W1.coverage")
+    require_number_or_none(part["W1"]["mean_zipf"], "W1.mean_zipf")
+    require_enum(part["W1"]["status"], {"ok"}, "W1.status")
+    if not isinstance(part["W1"]["lexicon_version"], str) or not part["W1"]["lexicon_version"]:
+        raise AnnotationError("W1.lexicon_version 必须是非空字符串")
+    expected_coverage = None if matched + oov == 0 else round4(Decimal(matched) / Decimal(matched + oov))
+    if part["W1"]["coverage"] != expected_coverage:
+        raise AnnotationError("W1.coverage 与 matched/oov 不一致")
+    if (matched == 0) != (part["W1"]["mean_zipf"] is None):
+        raise AnnotationError("W1.mean_zipf 与 matched 不一致")
+
+    low = require_int(part["W2"]["low_frequency_count"], 0, None, "W2.low_frequency_count")
+    w2_matched = require_int(part["W2"]["matched"], 0, None, "W2.matched")
+    require_number_or_none(part["W2"]["coverage"], "W2.coverage")
+    require_number_or_none(part["W2"]["low_frequency_ratio"], "W2.low_frequency_ratio")
+    if w2_matched != matched or part["W2"]["coverage"] != expected_coverage:
+        raise AnnotationError("W2 matched/coverage 必须与 W1 一致")
+    if low > matched:
+        raise AnnotationError("W2.low_frequency_count 不能大于 matched")
+    expected_low_ratio = None if matched == 0 else round4(Decimal(low) / Decimal(matched))
+    if part["W2"]["low_frequency_ratio"] != expected_low_ratio:
+        raise AnnotationError("W2.low_frequency_ratio 与 low_frequency_count/matched 不一致")
 
     pair_scores = part["C1"]["pair_scores"]
     if not isinstance(pair_scores, list):

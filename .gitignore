@@ -1,6 +1,12 @@
 .idea/
 .venv/
+.DS_Store
+__pycache__/
+*.py[cod]
 input/
 output/
 doc/*
 !doc/annotation_mechanism.md
+resources/*
+!resources/README.md
+README_LOCAL.md

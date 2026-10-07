@@ -8,7 +8,7 @@ PART_I_SYSTEM = r"""
 2. 只输出一个合法 JSON 对象，不要 Markdown、代码围栏、解释或思考过程。必须包含规定的全部指标和字段，不得新增字段。
 3. 计数字段必须是 JSON 整数。比例、均值和密度按规则计算；要求四舍五入 4 位或 2 位时使用 JSON 数值，允许省略末尾 0，不得写成字符串。
 4. MECHANICAL_VALUES 是程序依照文档规则预先计算的权威值。凡注明“复制机械值”的字段必须逐项原样复制，不得重新计算或修正。
-5. 当前没有提供固定 SUBTLEX-US 词表，也没有提供固定功能词词典/POS 标注器，所以 W1、W2、G1 必须走“资源缺失”分支；不得凭直觉估算。
+5. 程序已提供固定 NLTK POS/lemma 资源和 SUBTLEX-US Zipf 词表，MECHANICAL_VALUES.W1/W2 是权威结果，必须原样复制。当前仍未提供 G1 所需的固定功能词分类词典，所以 G1 必须走“资源缺失”分支；不得凭直觉估算。
 6. 凡写“等于 N1/N2”的字段必须与对应结果一致。空文本、短文本和资源缺失时严格使用规定的 0、[]、null 与布尔值。
 
 逐项定义（一级指标 -> 每个衡量字段 -> 规则）：
@@ -55,20 +55,20 @@ PART_I_SYSTEM = r"""
   - 规则：并列主句不算从属；0<=DC<=C；必须沿用 Y1 的小句边界。
 
 - W1 平均 Zipf 词频：内容词在固定通用英语词频表中的平均 Zipf 值，越高通常越常见。
-  - matched：词表命中的内容词 token 数 M；资源缺失，必须为 null。
-  - oov：未命中的内容词 token 数 O；资源缺失，必须为 null。
-  - coverage：M/(M+O)；资源缺失，必须为 null。
-  - mean_zipf：命中词 Zipf 平均值，M=0 为 null；资源缺失，必须为 null。
-  - lexicon_version：词表版本；未提供，必须为 null。
-  - status：必须是 lexicon_required。
-  - 规则：理论上的内容词为 NOUN、PROPN、非 AUX 的 VERB、ADJ、ADV；不得凭印象估值，也不得把 OOV 自动当低频词。
+  - matched：词表命中的内容词 token 数 M；复制 MECHANICAL_VALUES.W1.matched。
+  - oov：未命中词表的内容词 token 数 O；复制 MECHANICAL_VALUES.W1.oov。
+  - coverage：M/(M+O)；没有内容词时为 null，否则四舍五入 4 位；复制机械值。
+  - mean_zipf：已命中内容词 Zipf 值的平均数；M=0 时为 null，否则四舍五入 4 位；复制机械值。
+  - lexicon_version：固定 POS/lemma、SUBTLEX-US 与查找策略的组合版本；复制机械值中的非空字符串。
+  - status：资源已加载，必须是 ok。
+  - 规则：程序直接对 N1.tokens 运行固定 NLTK POS 标注，不重新分词；内容词为名词、专名、非助动词的动词、形容词和副词。SUBTLEX-US 优先按原词形查找，未命中时依次尝试去撇号词形和 WordNet lemma。OOV 不能当作低频词。整个 W1 必须原样复制 MECHANICAL_VALUES.W1，不得估算或修改。
 
 - W2 低频词比例：已命中的内容词中 Zipf<3 的 token 比例，并同时报告覆盖情况。
-  - low_frequency_count：已命中且 Zipf<3 的 token 数 L；资源缺失，必须为 null。
-  - matched：命中数 M；资源缺失，必须为 null。
-  - coverage：沿用 W1；资源缺失，必须为 null。
-  - low_frequency_ratio：L/M，M=0 为 null；资源缺失，必须为 null。
-  - 规则：OOV 不计低频，只降低 coverage；没有词表时四项均为 null。
+  - low_frequency_count：已命中且 Zipf<3 的内容词 token 数 L；复制 MECHANICAL_VALUES.W2.low_frequency_count。
+  - matched：命中数 M，必须等于 W1.matched；复制机械值。
+  - coverage：必须等于 W1.coverage；复制机械值。
+  - low_frequency_ratio：L/M；M=0 时为 null，否则四舍五入 4 位；复制机械值。
+  - 规则：OOV 不计低频，只降低 coverage。整个 W2 必须原样复制 MECHANICAL_VALUES.W2，不得猜测。
 
 - D1 词汇密度：有效词中承担主要概念意义的内容词比例，不是文本质量分。
   - content_word_count：内容词 token 数 CW；按当前语境将 NOUN、PROPN、非 AUX 的 VERB、ADJ、ADV 计入。
@@ -141,7 +141,7 @@ PART_I_SYSTEM = r"""
   - lexicon_version：未提供，必须为 null。
   - short_text：W<50 为 true，否则 false；程序填写。
   - status：必须是 lexicon_required。
-  - 规则：只能用固定词典/POS 计算；本任务未提供资源，不得自行分类或估计。
+  - 规则：只能用固定功能词分类词典计算；本任务尚未提供该词典，不得自行分类或估计。
 
 必须使用这个精确结构：
 {
@@ -151,8 +151,8 @@ PART_I_SYSTEM = r"""
   "O2":{"counts":{"list":0,"quote":0,"code":0,"link":0,"edit":0},"total":0},
   "Y1":{"word_count":0,"clause_count":0,"MLC":null,"parser_version":null,"insufficient":true},
   "Y2":{"dependent_clause_count":0,"clause_count":0,"DC_C":null,"parser_version":null,"insufficient":true},
-  "W1":{"matched":null,"oov":null,"coverage":null,"mean_zipf":null,"lexicon_version":null,"status":"lexicon_required"},
-  "W2":{"low_frequency_count":null,"matched":null,"coverage":null,"low_frequency_ratio":null},
+  "W1":{"matched":0,"oov":0,"coverage":null,"mean_zipf":null,"lexicon_version":"subtlex_us_pos_zipf_2013+nltk_3.9.2+wordnet_3.0+surface_then_lemma_v1","status":"ok"},
+  "W2":{"low_frequency_count":0,"matched":0,"coverage":null,"low_frequency_ratio":null},
   "D1":{"content_word_count":0,"word_count":0,"lexical_density":null,"tagger_version":null},
   "D2":{"token_count":0,"window_size":20,"window_ttr":[],"MATTR":null,"short_text":true},
   "C1":{"pair_scores":[],"mean_adjacent_overlap":null,"sentence_count":0},

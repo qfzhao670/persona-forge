@@ -66,11 +66,13 @@ PART_I_SCHEMA = object_schema({
         "parser_version": STRING_OR_NULL, "insufficient": {"type": "boolean"},
     }),
     "W1": object_schema({
-        "matched": NULL, "oov": NULL, "coverage": NULL, "mean_zipf": NULL,
-        "lexicon_version": NULL, "status": {"type": "string", "enum": ["lexicon_required"]},
+        "matched": INTEGER, "oov": INTEGER, "coverage": NUMBER_OR_NULL,
+        "mean_zipf": NUMBER_OR_NULL, "lexicon_version": STRING,
+        "status": {"type": "string", "enum": ["ok"]},
     }),
     "W2": object_schema({
-        "low_frequency_count": NULL, "matched": NULL, "coverage": NULL, "low_frequency_ratio": NULL,
+        "low_frequency_count": INTEGER, "matched": INTEGER,
+        "coverage": NUMBER_OR_NULL, "low_frequency_ratio": NUMBER_OR_NULL,
     }),
     "D1": object_schema({
         "content_word_count": INTEGER, "word_count": INTEGER,

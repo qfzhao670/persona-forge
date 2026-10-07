@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 from .client import chat
 from .config import AnnotationError, ClientConfig, PROMPT_VERSION, utc_now
+from .lexical import lexical_resource_status, lexical_values
 from .mechanics import mechanical_values
 from .prompts import PART_I_SYSTEM, PART_II_SYSTEM
 from .schemas import PART_I_SCHEMA, PART_II_SCHEMA
@@ -22,6 +23,7 @@ def annotate_one(
     if not isinstance(text, str):
         raise AnnotationError(f"第 {source_line} 行字段 {text_field!r} 不是字符串")
     fixed = mechanical_values(text)
+    fixed.update(lexical_values(fixed["N1"]["tokens"]))
     part_i, usage_i, tries_i = chat(
         PART_I_SYSTEM,
         {"comment": text, "MECHANICAL_VALUES": fixed},
@@ -52,8 +54,8 @@ def annotate_one(
         "attempts": {"part_i": tries_i, "part_ii": tries_ii},
         "usage": {"part_i": usage_i, "part_ii": usage_ii},
         "resource_status": {
-            "subtlex_us": "not_provided",
-            "function_word_lexicon_pos_tagger": "not_provided",
+            **lexical_resource_status(),
+            "function_word_lexicon": "not_provided",
             "flesch_syllables": "fixed_fallback_heuristic",
         },
     }

@@ -8,7 +8,14 @@
 - 输入文件：`input/random_100_comments.jsonl`
 - 输出文件：`output/random_100_comments_prelabeled.jsonl`
 
-脚本只使用 Python 标准库，不需要安装依赖，也不会默认发送 API key。
+W1/W2 使用固定版本的 NLTK POS/lemma 资源和 SUBTLEX-US Zipf 词频表。首次运行前安装依赖并准备本地资源：
+
+```bash
+python3 -m pip install -r requirements.txt
+python3 scripts/setup_lexical_resources.py
+```
+
+安装脚本从 Ghent University 和 NLTK 官方地址下载资源，校验固定 SHA-256，并在 `resources/` 生成本地文件。生成的数据不会进入 Git；详细版本与目录说明见 `resources/README.md`。
 
 ## 运行
 
@@ -37,7 +44,7 @@ python3 annotate_comments.py \
 `aliyun` provider（密钥不会写入命令历史或输出文件）：
 
 ```bash
-export DASHSCOPE_API_KEY="sk-8710483a982e426aa08765f872601588"
+export DASHSCOPE_API_KEY="<your-api-key>"
 python3 annotate_comments.py \
   --provider aliyun \
   --input input/random_100_comments.jsonl \
@@ -45,7 +52,7 @@ python3 annotate_comments.py \
   --concurrency 4
 ```
 ```bash
-export DASHSCOPE_API_KEY="sk-8710483a982e426aa08765f872601588"
+export DASHSCOPE_API_KEY="<your-api-key>"
 python3 annotate_comments.py \
   --provider aliyun \
   --input input/random_100_comments.jsonl \
@@ -70,15 +77,16 @@ Schema 会约束两部分标注的字段、嵌套结构和基础类型，脚本�
 
 - 每条评论发起两个独立请求，对应两份 PDF，避免 Part I/II 中同名的 `N1`、`P1` 冲突，也减少单次输出过长造成的漏项。
 - 评论以 JSON 字符串置于用户消息中，系统提示明确把它视为不可信数据，不执行评论内指令。
-- N1 分词、O1 段落、D2 MATTR、F1 固定音节启发式和所有派生公式由程序确定；模型负责需要语境的句法、词性、情绪、论证、立场、毒性和语用判断。
+- N1 分词、O1 段落、D2 MATTR、W1/W2 固定词频指标、F1 固定音节启发式和所有派生公式由程序确定；模型负责其余需要语境的句法、词性、情绪、论证、立场、毒性和语用判断。
 - 输出经过字段、枚举、数值范围、证据原文片段及跨字段一致性校验。失败会把校验错误反馈给模型重试；仍失败时写入 `status=error`，不会伪造标签。
-- 当前没有提供固定 SUBTLEX-US 词表及固定功能词词典/POS 标注器。依照 PDF 的“无词表不得猜”要求，W1/W2 与 G1 输出 `null`，并记录 `lexicon_required`。F1 使用代码中固定且可复现的后备音节规则。
+- W1/W2 直接对 N1 token 运行固定 NLTK POS 标注，通过 WordNet lemma 和 SUBTLEX-US Zipf 表计算；模型输出后程序会强制回填。G1 所需的固定功能词分类词典仍未提供，因此 G1 保持 `null` 和 `lexicon_required`。F1 使用固定且可复现的后备音节规则。
 
 代码按职责放在 `prelabeling/` 包中：
 
 - `config.py`：默认配置、客户端配置对象及共享异常。
 - `prompts.py`、`schemas.py`：模型提示词、输出结构和标签词表。
 - `mechanics.py`：分词、分段、MATTR、音节等确定性计算。
+- `lexical.py`：固定 POS/lemma 分析、SUBTLEX-US 加载及 W1/W2 计算。
 - `client.py`：OpenAI 兼容请求、结构化输出降级和重试。
 - `validation.py`：模型输出校验及公式字段回填。
 - `pipeline.py`：单条评论的两阶段标注流程。

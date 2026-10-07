@@ -2,7 +2,7 @@
 
 本文说明当前仓库中 Reddit 评论预标注程序的实际运行机制。内容以代码实现为准，指标定义来源于 [Reddit_I.pdf](./Reddit_I.pdf) 和 [Reddit_II.pdf](./Reddit_II.pdf)。
 
-当前提示词版本：`reddit-pdf-v1.1-detailed-fields`。
+当前提示词版本：`reddit-pdf-v1.2-subtlex-pos-lemma`。
 
 ## 1. 系统目标与边界
 
@@ -22,7 +22,7 @@
 3. 公式字段由程序根据基础计数重新计算，避免模型算术误差。
 4. 模型输出必须满足固定 JSON Schema。
 5. 所有证据片段必须能够在原评论中逐字找到。
-6. 缺少固定外部资源时返回 `null`，不得让模型凭直觉估计。
+6. W1/W2 使用固定版本、经过完整性校验的 POS/lemma 与 SUBTLEX-US 资源；仍缺少固定资源的 G1 返回 `null`，不得让模型凭直觉估计。
 7. Part I 和 Part II 分成两个独立请求，避免同名指标冲突并降低单次输出复杂度。
 
 > [!important]
@@ -37,12 +37,15 @@
 | `prelabeling/config.py` | 默认服务地址、模型、路径、提示词版本、客户端配置和共享异常 |
 | `prelabeling/pipeline.py` | 单条评论的 Part I、公式回填、Part II 编排 |
 | `prelabeling/mechanics.py` | 分词、分段、MATTR、音节数等确定性计算 |
+| `prelabeling/lexical.py` | 固定 POS/lemma 资源加载、内容词筛选、SUBTLEX-US 查找与 W1/W2 计算 |
 | `prelabeling/prompts.py` | Part I 和 Part II 的系统提示词及全部字段定义 |
 | `prelabeling/schemas.py` | 严格 JSON Schema、顶层指标清单和枚举集合 |
 | `prelabeling/client.py` | OpenAI 兼容请求、结构化输出降级、JSON 提取和重试 |
 | `prelabeling/validation.py` | 原文证据、范围、枚举、跨字段一致性校验及公式回填 |
 | `prelabeling/storage.py` | 输入解析、输出格式化、输出读取和 `--resume` 支持 |
 | `tests/test_refactor.py` | 当前离线回归测试 |
+| `scripts/setup_lexical_resources.py` | 下载、校验并规范化 W1/W2 所需的固定外部资源 |
+| `resources/README.md` | 资源版本、生成方式、目录和再分发边界 |
 
 ## 3. 总体执行流程
 
@@ -50,8 +53,9 @@
 flowchart TD
     A[读取输入 JSONL] --> B[检查每行是 JSON 对象]
     B --> C[取得 text-field 对应评论文本]
-    C --> D[mechanical_values 生成固定机械值]
-    D --> E[Part I 模型请求]
+    C --> D[mechanical_values 生成 N1/O1/D2/F1 固定值]
+    D --> D2[固定 POS/lemma + SUBTLEX-US 生成 W1/W2]
+    D2 --> E[Part I 模型请求]
     E --> F[JSON Schema 与 validate_part_i 初次校验]
     F --> G[set_formula_fields 强制回填机械值和公式]
     G --> H[validate_part_i 再次校验]
@@ -132,6 +136,7 @@ Part I 请求之前，程序执行：
 
 ```python
 fixed = mechanical_values(text)
+fixed.update(lexical_values(fixed["N1"]["tokens"]))
 ```
 
 返回结构为：
@@ -153,6 +158,20 @@ fixed = mechanical_values(text)
     "MATTR": null,
     "short_text": true
   },
+  "W1": {
+    "matched": 0,
+    "oov": 0,
+    "coverage": null,
+    "mean_zipf": null,
+    "lexicon_version": "subtlex_us_pos_zipf_2013+nltk_3.9.2+wordnet_3.0+surface_then_lemma_v1",
+    "status": "ok"
+  },
+  "W2": {
+    "low_frequency_count": 0,
+    "matched": 0,
+    "coverage": null,
+    "low_frequency_ratio": null
+  },
   "F1_syllable_count": 0
 }
 ```
@@ -170,6 +189,8 @@ Part I 的用户数据结构为：
     "N1": {},
     "O1": {},
     "D2": {},
+    "W1": {},
+    "W2": {},
     "F1_syllable_count": 0
   }
 }
@@ -213,7 +234,7 @@ Part II 的 16 个指标均由模型依据详细提示词判断，再由 JSON Sc
 | --- | --- | --- | --- |
 | `COMMENT_JSON_AND_FIXED_VALUES` | 发给模型时使用的文本标签 | 否 | `client.chat()` |
 | `comment` | 原始评论字段 | 是 | `pipeline.annotate_one()` |
-| `MECHANICAL_VALUES` | Part I 的程序预计算结果字段 | 是，仅 Part I 存在 | `pipeline.annotate_one()` 调用 `mechanical_values()` |
+| `MECHANICAL_VALUES` | Part I 的程序预计算结果字段 | 是，仅 Part I 存在 | `pipeline.annotate_one()` 组合 `mechanical_values()` 与 `lexical_values()` |
 
 下面使用同一条评论展示它们在程序中的完整流转。
 
@@ -240,13 +261,14 @@ Update: It works great!
 - 两个由空行分隔的段落。
 - 9 个按项目规则识别出的英文 token。
 
-### 6.2 `mechanical_values()` 实际生成什么
+### 6.2 程序实际生成什么固定值
 
 程序首先执行：
 
 ```python
 text = "We’re testing https://example.com and DON'T stop.\n\nUpdate: It works great!"
 fixed = mechanical_values(text)
+fixed.update(lexical_values(fixed["N1"]["tokens"]))
 ```
 
 `fixed` 的实际内容为：
@@ -281,6 +303,20 @@ fixed = mechanical_values(text)
     "MATTR": 1.0,
     "short_text": true
   },
+  "W1": {
+    "matched": 5,
+    "oov": 0,
+    "coverage": 1.0,
+    "mean_zipf": 4.9316,
+    "lexicon_version": "subtlex_us_pos_zipf_2013+nltk_3.9.2+wordnet_3.0+surface_then_lemma_v1",
+    "status": "ok"
+  },
+  "W2": {
+    "low_frequency_count": 0,
+    "matched": 5,
+    "coverage": 1.0,
+    "low_frequency_ratio": 0.0
+  },
   "F1_syllable_count": 11
 }
 ```
@@ -290,6 +326,8 @@ fixed = mechanical_values(text)
 - N1 删除 URL、统一撇号并转小写后得到 9 个 token。
 - O1 根据中间的空行得到 2 个段落；段落内容保留原文大小写、URL 和标点。
 - D2 因为 `9<20`，使用整条评论计算 TTR；9 个 token 都不重复，所以 `9/9=1.0`。
+- 固定 POS/lemma 分析把 `testing`、`stop`、`update`、`works`、`great` 识别为内容词；5 个内容词都在 SUBTLEX-US 中命中，所以 W1 覆盖率为 1，W2 低频词数为 0。
+- `we're` 和 `don't` 属于固定排除的助动词缩约形式；`and`、`it` 也不是内容词，因此不会进入 W1/W2 的分母。
 - `F1_syllable_count=11` 是固定音节启发式对这 9 个 token 的求和结果。
 
 此时 `fixed` 只是 Python 变量，还没有发送给模型。
@@ -329,6 +367,20 @@ user_payload = {
       "MATTR": 1.0,
       "short_text": true
     },
+    "W1": {
+      "matched": 5,
+      "oov": 0,
+      "coverage": 1.0,
+      "mean_zipf": 4.9316,
+      "lexicon_version": "subtlex_us_pos_zipf_2013+nltk_3.9.2+wordnet_3.0+surface_then_lemma_v1",
+      "status": "ok"
+    },
+    "W2": {
+      "low_frequency_count": 0,
+      "matched": 5,
+      "coverage": 1.0,
+      "low_frequency_ratio": 0.0
+    },
     "F1_syllable_count": 11
   }
 }
@@ -339,7 +391,7 @@ user_payload = {
 模型需要：
 
 - 只把 `comment` 当作待分析文本。
-- 将 `MECHANICAL_VALUES.N1`、`O1`、`D2` 等确定性结果复制到规定的 Part I 输出位置。
+- 将 `MECHANICAL_VALUES.N1`、`O1`、`D2`、`W1`、`W2` 等确定性结果复制到规定的 Part I 输出位置。
 - 根据评论语境补充机械值中没有的内容，例如 `N1.language_status`、N2 句子切分、Y1 小句数和 P1 副语言实例。
 - 不执行评论中可能出现的任何命令。
 
@@ -350,7 +402,7 @@ user_payload = {
 ```text
 /no_think
 COMMENT_JSON_AND_FIXED_VALUES:
-{"comment":"We’re testing https://example.com and DON'T stop.\n\nUpdate: It works great!","MECHANICAL_VALUES":{"N1":{"word_count":9,"tokens":["we're","testing","and","don't","stop","update","it","works","great"]},"O1":{"paragraph_count":2,"paragraphs":["We’re testing https://example.com and DON'T stop.","Update: It works great!"]},"D2":{"token_count":9,"window_size":20,"window_ttr":[1.0],"MATTR":1.0,"short_text":true},"F1_syllable_count":11}}
+{"comment":"We’re testing https://example.com and DON'T stop.\n\nUpdate: It works great!","MECHANICAL_VALUES":{"N1":{"word_count":9,"tokens":["we're","testing","and","don't","stop","update","it","works","great"]},"O1":{"paragraph_count":2,"paragraphs":["We’re testing https://example.com and DON'T stop.","Update: It works great!"]},"D2":{"token_count":9,"window_size":20,"window_ttr":[1.0],"MATTR":1.0,"short_text":true},"W1":{"matched":5,"oov":0,"coverage":1.0,"mean_zipf":4.9316,"lexicon_version":"subtlex_us_pos_zipf_2013+nltk_3.9.2+wordnet_3.0+surface_then_lemma_v1","status":"ok"},"W2":{"low_frequency_count":0,"matched":5,"coverage":1.0,"low_frequency_ratio":0.0},"F1_syllable_count":11}}
 ```
 
 从标点边界可以直接看出：
@@ -421,6 +473,7 @@ set_formula_fields(part_i, fixed, config.model)
 - `part_i.N1.tokens` 等于上面的 9 个 token。
 - `part_i.O1` 等于上面的两个段落。
 - `part_i.D2.MATTR=1.0`，并覆盖整个 D2。
+- `part_i.W1` 和 `part_i.W2` 等于上面的固定词法结果。
 - `part_i.F1.syllable_count=11`。
 - 依赖这些基础值的 MLC、词汇密度、连接词密度、副语言密度和 Flesch 易读度由程序重新计算。
 
@@ -498,6 +551,54 @@ TTR = 不同词形数 / N
 
 该规则可复现，但只是回退估计，对专名、缩写、外来词和不规则发音可能不准确。
 
+### 7.5 W1/W2 固定 POS、lemma 与 SUBTLEX-US 联合计算
+
+W1/W2 不是模型判断项。程序启动批处理时先加载并验证以下固定资源：
+
+- `nltk==3.9.2`。
+- NLTK `averaged_perceptron_tagger_eng` 英文 Penn Treebank 词性标注器。
+- WordNet 3.0 lemmatizer 数据。
+- Ghent University 发布的 SUBTLEX-US PoS/Zipf Excel 表，规范化后含 74,286 个小写词形。
+
+首次准备资源：
+
+```bash
+python3 -m pip install -r requirements.txt
+python3 scripts/setup_lexical_resources.py
+```
+
+安装脚本校验三个下载 ZIP 的固定 SHA-256、Excel 表头和条目数，再生成 `resources/lexical_manifest.json`、`resources/subtlex_us_zipf.tsv` 和本地 `nltk_data/`。运行时会再次校验规范化 TSV 的 SHA-256、NLTK 数据目录哈希、条目数、清单版本及 NLTK 包版本；任何一项不一致都会在发起模型请求前失败，并提示重新准备资源。
+
+每条评论的计算顺序如下：
+
+1. 直接复用 `N1.tokens`；不会再次分词，所以 URL 删除、撇号规范化、小写化及 token 数始终与 N1 一致。
+2. 对完整 token 序列运行固定英文 Penn 词性标注器。
+3. 将 Penn 名词、动词、形容词、副词映射到 WordNet 词性并生成 lemma。
+4. 把名词、专名、非助动词的动词、形容词和副词视为内容词。模态动词、`be`、固定缩约助动词，以及规则可确认的 `have/do + 动词` 不计入。
+5. 每个内容词依次尝试：原 token、去撇号 token、lemma、去撇号 lemma；第一次在 SUBTLEX-US 命中即采用该 Zipf 值。
+6. 同一词多次出现按 token 次数重复计数，而不是只计不同词形。
+
+W1 的公式为：
+
+```text
+M = 命中 SUBTLEX-US 的内容词 token 数
+O = 未命中的内容词 token 数
+coverage = M / (M + O)；没有内容词时为 null
+mean_zipf = 命中 Zipf 值之和 / M；M=0 时为 null
+```
+
+W2 的公式为：
+
+```text
+L = 已命中且 Zipf < 3 的内容词 token 数
+low_frequency_ratio = L / M；M=0 时为 null
+```
+
+比例和均值统一四舍五入 4 位。OOV 只增加 `W1.oov` 并降低覆盖率，不会自动算作低频词。程序把结果加入 `MECHANICAL_VALUES.W1/W2`，模型返回后 `set_formula_fields()` 还会再次用固定结果覆盖 W1/W2。
+
+> [!note]
+> POS 标注器接收的是 N1 的小写 token 流，而不是保留大小写、标点和句界的原文。这是为了确保 W1/W2 与 N1 使用同一计数口径，但也意味着专名与句界线索较弱；该选择被写入组合资源版本，后续如改变输入口径必须提升版本并重跑数据。
+
 ## 8. Part I 指标与计算责任
 
 | 指标 | 含义 | 模型负责 | 程序负责/覆盖 |
@@ -508,8 +609,8 @@ TTR = 不同词形数 / N
 | O2 | Markdown/编辑结构 | 五类 `counts` | `total` 求和 |
 | Y1 | 平均小句长度 | `clause_count` | W、MLC、版本、短样本标志 |
 | Y2 | 从属小句比 | `dependent_clause_count` | C、DC/C、版本、短样本标志 |
-| W1 | 平均 Zipf 词频 | 当前不估计 | 整项固定为资源缺失 |
-| W2 | 低频词比例 | 当前不估计 | 整项固定为资源缺失 |
+| W1 | 平均 Zipf 词频 | 复制机械值 | 固定 POS/lemma、词表命中、覆盖率与均值；整项强制覆盖 |
+| W2 | 低频词比例 | 复制机械值 | 低频计数与比例；整项强制覆盖 |
 | D1 | 词汇密度 | `content_word_count` | W、密度、标注器版本 |
 | D2 | MATTR | 理论上需输出完整结构 | 整个 D2 强制覆盖 |
 | C1 | 相邻句词汇重叠 | `pair_scores` | 均值、句子数 |
@@ -598,13 +699,11 @@ reading_ease = 206.835
 
 ### 8.2 当前固定为空的资源型指标
 
-当前未提供固定 SUBTLEX-US 词表，也未提供固定功能词词典/POS 标注器，因此：
+当前已提供 W1/W2 所需的固定 POS/lemma 与 SUBTLEX-US 资源。尚未提供的是 G1 所需的固定功能词分类词典，因此：
 
-- W1 的 `matched`、`oov`、`coverage`、`mean_zipf`、`lexicon_version` 为 `null`，`status="lexicon_required"`。
-- W2 的全部四个字段为 `null`。
 - G1 的八类比例、`CDI`、`lexicon_version` 为 `null`，`status="lexicon_required"`。
 
-这是有意设计，不是运行错误。系统遵循“没有固定资源就不猜测”的原则。
+这是有意设计，不是运行错误。系统继续遵循“没有固定资源就不猜测”的原则，但该限制现在只影响 G1。
 
 ## 9. Part I 指标目录
 
@@ -705,7 +804,7 @@ Part II 没有机械回填，所有核心判断来自模型，但输出仍受到
 - 不允许模型添加解释性字段。
 - 数组元素类型受到限制。
 - 多数类别字段通过 `enum` 限定。
-- 资源缺失字段直接被 Schema 限定为 `null`。
+- 当前资源缺失的 G1 字段被 Schema 限定为 `null`；W1/W2 则使用整数、数值或条件性 `null` 类型。
 
 Schema 主要解决结构和基础类型问题；复杂数值范围、原文证据和跨字段关系由 Python 验证器处理。
 
@@ -736,6 +835,8 @@ Schema 主要解决结构和基础类型问题；复杂数值范围、原文证�
 - O2、C2、P2 的计数必须是非负整数且子键完整。
 - `Y2.dependent_clause_count <= Y1.clause_count`。
 - `D1.content_word_count <= N1` 的机械词数。
+- W1 的 `matched`、`oov` 必须为非负整数，`coverage` 必须等于 `matched/(matched+oov)`；`matched=0` 当且仅当 `mean_zipf=null`。
+- W2 的 `matched`、`coverage` 必须与 W1 一致，低频数不得大于命中数，比例必须等于 `low_frequency_count/matched`。
 - `len(C1.pair_scores) == max(sentence_count-1, 0)`。
 - 非空 C1 分数必须在 `0..1`。
 - P1 每个实例必须包含合法类型和非空原文证据。
@@ -886,14 +987,16 @@ json_schema -> json_object -> 普通聊天请求
 
 ## 18. 当前资源状态与已知局限
 
-### 18.1 外部词典缺失
+### 18.1 固定词法资源是运行前置条件
 
-W1、W2、G1 当前不能产生真实数值。如果未来加入词典，必须同时修改：
+W1/W2 已能产生固定数值，但批处理现在要求本地存在正确版本的 NLTK 数据与 SUBTLEX-US 规范化表。资源缺失、损坏、哈希不符、条目数不符或 NLTK 包版本不符时，程序会在模型调用前停止，不会退回模型估计。生成的数据目录默认不进入 Git，新环境必须先运行资源安装脚本。
+
+G1 当前仍不能产生真实数值。如果未来加入功能词分类词典，必须同时修改：
 
 - 资源加载逻辑。
-- Schema 中当前固定为 `null` 的类型。
+- Schema 中 G1 当前固定为 `null` 的类型。
 - Part I 提示词。
-- `set_formula_fields()` 的强制空值逻辑。
+- `set_formula_fields()` 的 G1 强制空值逻辑。
 - 元数据 `resource_status`。
 - 测试和本文档。
 
@@ -901,11 +1004,15 @@ W1、W2、G1 当前不能产生真实数值。如果未来加入词典，必须�
 
 F1 使用固定规则而非发音词典，优点是无依赖、可复现；缺点是部分英文词的音节数可能不准确。短评论的 Flesch 分数本身也容易剧烈波动，因此同时输出 `short_text`。
 
-### 18.3 语义指标仍依赖模型
+### 18.3 固定 POS 的已知边界
+
+词性标注在 N1 已小写、去 URL、去标点且不保留句界的 token 流上运行。这样能保证 W1/W2 的计数口径稳定，但会损失大小写和标点线索。Penn tag 本身也不直接区分所有 `VERB/AUX` 情形，因此代码使用固定助动词规则；复杂倒装或歧义结构仍可能被误分。lemma 和 SUBTLEX-US 回退能提高覆盖率，但不能把未命中项推断成低频词。
+
+### 18.4 语义指标仍依赖模型
 
 句子切分、小句识别、内容词判断、连接词语境、副语言识别以及全部 Part II 指标仍可能存在模型误判。校验器只能验证结构、范围、证据存在性和部分逻辑关系，不能证明语义标签正确。
 
-### 18.4 原文片段校验是子串校验
+### 18.5 原文片段校验是子串校验
 
 当前证据检查使用 Python 的 `span in text`。它能阻止模型生成完全不存在的证据，但不能验证：
 
@@ -914,11 +1021,11 @@ F1 使用固定规则而非发音词典，优点是无依赖、可复现；缺�
 - 证据是否足以支持标签。
 - 多个字段是否错误复用了同一片段。
 
-### 18.5 结构化输出兼容性取决于服务端
+### 18.6 结构化输出兼容性取决于服务端
 
 部分 OpenAI 兼容服务不支持严格 JSON Schema。系统会自动降级，但越往后，服务端约束越弱，越依赖提示词和本地重试。
 
-### 18.6 两阶段请求不是事务
+### 18.7 两阶段请求不是事务
 
 Part I 成功后，如果 Part II 最终失败，当前实现不会保存仅 Part I 的部分成功结果；整条记录会进入 `error_record()`，`annotations=null`。
 
@@ -930,12 +1037,13 @@ Part I 成功后，如果 Part II 最终失败，当前实现不会保存仅 Par
 2. `prelabeling/prompts.py`：模型定义、字段说明和精确输出结构。
 3. `prelabeling/schemas.py`：字段、类型、必填项和枚举。
 4. `prelabeling/validation.py`：范围、原文证据和跨字段一致性。
-5. `prelabeling/mechanics.py`：新增的确定性计算。
+5. `prelabeling/mechanics.py` 与 `prelabeling/lexical.py`：新增的确定性计算及固定资源逻辑。
 6. `set_formula_fields()`：派生公式和强制覆盖。
 7. `prelabeling/pipeline.py`：请求输入和结果组合。
 8. `prelabeling/config.py`：提升 `PROMPT_VERSION`。
 9. `tests/`：新增边界和回归测试。
-10. 本文档与 README。
+10. 若资源或查找策略改变：资源安装脚本、manifest 格式、组合版本号和 `resources/README.md`。
+11. 本文档与 README。
 
 如果只修改提示词而不修改 Schema，模型可能被要求输出 Schema 不允许的字段；如果只修改 Schema 而不修改验证器，可能产生结构合法但逻辑错误的结果。
 
@@ -945,6 +1053,9 @@ Part I 成功后，如果 Part II 最终失败，当前实现不会保存仅 Par
 
 - URL 删除、撇号规范化和分词。
 - 空文本与短文本 MATTR。
+- W1/W2 内容词过滤、surface/lemma 回退、OOV、覆盖率、Zipf 均值、低频比例和无内容词边界。
+- 词法资源缺失时的可操作错误信息。
+- W1/W2 固定值会在 Part I 请求前加入 `MECHANICAL_VALUES`。
 - 输出格式化后的重新读取。
 - 根入口对公共函数的兼容导出。
 - 默认 provider 配置。

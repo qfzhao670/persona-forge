@@ -22,6 +22,7 @@ from .config import (
     DEFAULT_OUTPUT,
 )
 from .pipeline import annotate_one, error_record
+from .lexical import load_lexical_resources
 from .storage import completed_lines, format_output_record, load_jsonl
 
 
@@ -94,6 +95,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     pending = [(line_no, row) for line_no, row in rows if line_no not in done]
     if args.output.exists() and not args.resume:
         raise AnnotationError(f"输出文件已存在: {args.output}（使用 --resume 或换一个路径）")
+    if pending:
+        # Initialize lazy NLTK/WordNet resources once before worker threads start.
+        load_lexical_resources()
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     write_lock = threading.Lock()

@@ -31,6 +31,15 @@ from prelabeling.mechanics import (
     syllables_in_token,
     tokenize,
 )
+from prelabeling.lexical import (
+    LEXICON_VERSION,
+    TokenAnalysis,
+    analyze_tokens,
+    frequency_metrics,
+    lexical_resource_status,
+    lexical_values,
+    load_lexical_resources,
+)
 from prelabeling.pipeline import annotate_one, error_record
 from prelabeling.prompts import PART_I_SYSTEM, PART_II_SYSTEM
 from prelabeling.schemas import (
